@@ -1,68 +1,71 @@
 import os
-from pymongo import MongoClient
+from supabase import create_client, Client
 from datetime import datetime
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 
-def get_db_client():
-    """Establish and return a MongoDB client."""
+_supabase_client: Client = None
+
+def _get_secret(key: str, default: str = "") -> str:
+    """Read from Streamlit secrets (cloud) or .env (local)."""
     try:
-        mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
-        client = MongoClient(mongo_uri)
-        # Force a call to check if connection is successful
-        client.admin.command('ping')
-        return client
+        import streamlit as st
+        return st.secrets.get(key, os.getenv(key, default))
+    except Exception:
+        return os.getenv(key, default)
+
+def get_db_client() -> Client:
+    """Return a Supabase client instance (singleton)."""
+    global _supabase_client
+    if _supabase_client is not None:
+        return _supabase_client
+    try:
+        url = _get_secret("SUPABASE_URL")
+        key = _get_secret("SUPABASE_KEY")
+        if not url or not key:
+            print("Supabase credentials not set.")
+            return None
+        _supabase_client = create_client(url, key)
+        return _supabase_client
     except Exception as e:
-        print(f"Error connecting to MongoDB: {e}")
+        print(f"Error connecting to Supabase: {e}")
         return None
 
-def get_db():
-    """Return the admission database instance."""
+def initialize_database():
+    """Check Supabase connection on startup."""
     client = get_db_client()
     if client:
-        db_name = os.getenv("DB_NAME", "admission_db")
-        return client[db_name]
-    return None
-
-def initialize_database():
-    """Ensure collections exist (MongoDB creates them on first insert, but we can set indexes)."""
-    db = get_db()
-    if db is not None:
-        # Create index for admin_users username
-        db.admin_users.create_index("username", unique=True)
-        print("Database initialized (Collections ready).")
+        print("Supabase connected successfully.")
+    else:
+        print("Supabase connection failed. Check credentials.")
 
 def insert_lead(name, phone, email, query):
-    """Insert a new student lead into the leads collection."""
-    db = get_db()
-    if db is not None:
+    """Insert a new student lead into the leads table."""
+    client = get_db_client()
+    if client:
         try:
-            lead_data = {
+            data = {
                 "name": name,
                 "phone": phone,
                 "email": email,
                 "query": query,
-                "created_at": datetime.utcnow()
+                "created_at": datetime.utcnow().isoformat()
             }
-            result = db.leads.insert_one(lead_data)
-            return True if result.inserted_id else False
+            result = client.table("leads").insert(data).execute()
+            return len(result.data) > 0
         except Exception as e:
             print(f"Error inserting lead: {e}")
             return False
     return False
 
 def get_all_leads():
-    """Fetch all leads from the database."""
-    db = get_db()
-    if db is not None:
+    """Fetch all leads ordered by newest first."""
+    client = get_db_client()
+    if client:
         try:
-            leads = list(db.leads.find().sort("created_at", -1))
-            # Convert ObjectId to string for compatibility with Streamlit/Pandas
-            for lead in leads:
-                lead["_id"] = str(lead["_id"])
-            return leads
+            result = client.table("leads").select("*").order("created_at", desc=True).execute()
+            return result.data
         except Exception as e:
             print(f"Error fetching leads: {e}")
     return []

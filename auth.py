@@ -1,48 +1,54 @@
 import bcrypt
 import os
-from db import get_db
+from dotenv import load_dotenv
+from db import get_db_client
+
+load_dotenv()
+
+def _get_secret(key: str, default: str = "") -> str:
+    try:
+        import streamlit as st
+        return st.secrets.get(key, os.getenv(key, default))
+    except Exception:
+        return os.getenv(key, default)
 
 def hash_password(password: str) -> str:
-    """Hashes a password using bcrypt."""
     salt = bcrypt.gensalt()
     hashed = bcrypt.hashpw(password.encode('utf-8'), salt)
     return hashed.decode('utf-8')
 
 def check_password(password: str, hashed: str) -> bool:
-    """Checks a password against a bcrypt hash."""
     return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
 
 def get_admin_user(username: str):
-    """Fetch an admin user by username from MongoDB."""
-    db = get_db()
-    if db is not None:
+    client = get_db_client()
+    if client:
         try:
-            return db.admin_users.find_one({"username": username})
+            result = client.table("admin_users").select("*").eq("username", username).execute()
+            if result.data:
+                return result.data[0]
         except Exception as e:
             print(f"Error fetching admin: {e}")
     return None
 
 def create_initial_admin():
-    """Create a default admin user if none exists."""
-    db = get_db()
-    if db is not None:
+    client = get_db_client()
+    if client:
         try:
-            count = db.admin_users.count_documents({})
-            if count == 0:
-                default_username = os.getenv("DEFAULT_ADMIN_USER", "admin")
-                default_password = os.getenv("DEFAULT_ADMIN_PASS", "admin123")
+            result = client.table("admin_users").select("id").execute()
+            if len(result.data) == 0:
+                default_username = _get_secret("DEFAULT_ADMIN_USER", "admin")
+                default_password = _get_secret("DEFAULT_ADMIN_PASS", "admin123")
                 hashed_pw = hash_password(default_password)
-                
-                db.admin_users.insert_one({
+                client.table("admin_users").insert({
                     "username": default_username,
                     "password_hash": hashed_pw
-                })
-                print(f"Default admin created successfully! User: {default_username}")
+                }).execute()
+                print(f"Default admin created: {default_username}")
         except Exception as e:
             print(f"Error creating initial admin: {e}")
 
 def authenticate_admin(username, password):
-    """Verify admin credentials."""
     user = get_admin_user(username)
     if user and check_password(password, user['password_hash']):
         return True
