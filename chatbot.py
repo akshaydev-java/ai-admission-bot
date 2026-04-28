@@ -1,11 +1,15 @@
 import os
-from openai import OpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# Setup OpenAI Client
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+def _get_secret(key: str, default: str = "") -> str:
+    """Read from Streamlit secrets (cloud) or .env (local)."""
+    try:
+        import streamlit as st
+        return st.secrets.get(key, os.getenv(key, default))
+    except Exception:
+        return os.getenv(key, default)
 
 SYSTEM_PROMPT = """
 You are a professional admission counselor for our esteemed college/institute.
@@ -30,6 +34,17 @@ FAQ_FALLBACK = {
     "contact": "You can reach us at admissions@ourcollege.edu or call +1-800-555-1234."
 }
 
+def _get_openai_client():
+    """Lazily create OpenAI client only when a valid key exists."""
+    try:
+        from openai import OpenAI
+        api_key = _get_secret("OPENAI_API_KEY")
+        if not api_key or api_key == "your_openai_api_key_here":
+            return None
+        return OpenAI(api_key=api_key)
+    except Exception:
+        return None
+
 def get_fallback_response(user_message: str) -> str:
     """Return a fallback response based on keywords if the API fails."""
     user_message_lower = user_message.lower()
@@ -39,17 +54,13 @@ def get_fallback_response(user_message: str) -> str:
     return "I'm currently experiencing some technical difficulties. Please provide your contact details in the 'Leave your Details' section, and our counselors will reach out to you shortly."
 
 def get_chatbot_response(messages: list) -> str:
-    """
-    Get response from OpenAI. 
-    messages: list of dictionaries e.g. [{"role": "system", "content": ...}, {"role": "user", "content": ...}]
-    """
-    if not os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY") == "your_openai_api_key_here":
-        # Simulate local fallback if no API key is provided
+    """Get response from OpenAI, or fallback to FAQ."""
+    client = _get_openai_client()
+    if client is None:
         return get_fallback_response(messages[-1]["content"])
-
     try:
         response = client.chat.completions.create(
-            model="gpt-3.5-turbo", # Replace with gpt-4 or gpt-4o if preferred
+            model="gpt-3.5-turbo",
             messages=messages,
             max_tokens=150,
             temperature=0.7
@@ -57,11 +68,10 @@ def get_chatbot_response(messages: list) -> str:
         return response.choices[0].message.content
     except Exception as e:
         print(f"OpenAI API Error: {e}")
-        # Return fallback response if API call fails
         return get_fallback_response(messages[-1]["content"])
 
 def generate_auto_replies(chat_history: list) -> list:
-    """Generate 2-3 quick auto-reply suggestions based on context. For simplicity, we return static ones here."""
+    """Generate quick reply suggestions."""
     return [
         "What courses do you offer?",
         "What is the fee structure?",
